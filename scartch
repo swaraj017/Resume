@@ -1,0 +1,142 @@
+from flask import Flask, render_template
+from openpyxl import load_workbook
+import re  # Add this line
+import os
+import json
+from PyPDF2 import PdfReader
+import spacy
+from openpyxl import Workbook
+from collections import Counter
+from datetime import datetime
+
+app = Flask(__name__)
+
+# Specify the full path to the folder containing resumes
+RESUME_FOLDER = "C:/Users/Swaraj Gaikwad/OneDrive/Desktop/Resume Short Lister/resumes"
+
+# Load English tokenizer, tagger, parser, NER, and word vectors
+nlp = spacy.load("en_core_web_sm")
+
+
+def extract_skills(text):
+    # Define a regular expression pattern to match skills
+    skills_pattern = r'(Java|C\+\+|JavaScript|Python|HTML5/CSS|SQL|NodeJs|VScode|Git|Github|ReactJs|NextJs|ExpressJs|Tailwind CSS|MongoDB|PostgreSQL|MySQL|AWS)'
+    skills = re.findall(skills_pattern, text, re.IGNORECASE)
+    return [skill.lower() for skill in skills]
+
+
+def extract_text_from_pdf(file_path):
+    text = ""
+    with open(file_path, "rb") as file:
+        pdf_reader = PdfReader(file)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+    return text
+
+
+def extract_name_from_filename(filename):
+    # Extract the candidate's name from the filename
+    name = os.path.splitext(filename)[0]
+    name = name.replace("_", " ")  # Replace underscores with spaces
+    return name
+
+
+def score_resume(skills, job_keywords):
+    # Count the number of matching skills
+    skill_counter = Counter(skills)
+    score = sum(skill_counter[key] for key in job_keywords)
+    return score
+
+
+def shortlist_resumes(resume_folder, job_description):
+    # Extract skills from the job description
+    job_keywords = set(extract_skills(job_description))
+
+    shortlisted_resumes = []
+    for filename in os.listdir(resume_folder):
+        if filename.endswith(".pdf"):
+            file_path = os.path.join(resume_folder, filename)
+            text = extract_text_from_pdf(file_path)
+            skills = extract_skills(text)
+            score = score_resume(skills, job_keywords)
+            name = extract_name_from_filename(filename)
+            resume_data = {
+                "name": name,
+                "skills": skills,
+                "score": score
+            }
+            shortlisted_resumes.append(resume_data)
+
+    # Sort resumes by score
+    sorted_resumes = sorted(shortlisted_resumes, key=lambda x: x["score"], reverse=True)
+    return sorted_resumes
+
+
+def create_excel_sheet(resumes):
+    # Generate a unique filename based on current date and time
+    current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    excel_filename = f"shortlisted_resumes_{current_datetime}.xlsx"
+
+    # Create a new Excel workbook
+    wb = Workbook()
+    ws = wb.active
+
+    # Add headers
+    ws.append(["Name", "Skills", "Score"])
+
+    # Add data
+    for resume in resumes:
+        ws.append([resume["name"], ", ".join(resume["skills"]), resume["score"]])
+
+    # Save the workbook with the generated filename
+    wb.save(excel_filename)
+    return excel_filename
+
+
+def excel_to_json(xlsx_file):
+    data = []
+    wb = load_workbook(filename=xlsx_file)
+    ws = wb.active
+    headers = [cell.value for cell in ws[1]]
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        data.append(dict(zip(headers, row)))
+    return json.dumps(data, indent=2)
+
+
+def process_excel_files(excel_directory):
+    excel_files = [filename for filename in os.listdir(excel_directory) if filename.endswith(".xlsx")]
+    output = []
+
+    if excel_files:
+        for excel_file in excel_files:
+            excel_path = os.path.join(excel_directory, excel_file)
+            json_data = excel_to_json(excel_path)
+            output.append((excel_file, json_data))
+    else:
+        output.append(("No Excel files found", ""))
+
+    return output
+
+
+@app.route('/')
+def index():
+    # Sample job description
+    job_description = """
+    We are looking for a Full Stack Web Developer proficient in Java, C++, JavaScript, Python, HTML5/CSS, and SQL.
+    Experience with web development frameworks such as React.js, Next.js, and Express.js is required.
+    Familiarity with version control systems like Git and databases including MongoDB, PostgreSQL, MySQL, and AWS is a plus.
+    """
+
+    # Assuming resumes are stored in the 'resumes' folder
+    shortlisted_resumes = shortlist_resumes(RESUME_FOLDER, job_description)
+    excel_filename = create_excel_sheet(shortlisted_resumes)
+
+    # Directory containing Excel files
+    excel_directory = "C:/Users/Swaraj Gaikwad/OneDrive/Desktop/Resume Short Lister/templates"
+    output = process_excel_files(excel_directory)
+
+    return render_template('index.html', output=output)
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
